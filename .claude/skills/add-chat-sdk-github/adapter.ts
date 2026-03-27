@@ -1,6 +1,6 @@
 import { createGitHubAdapter } from '@chat-adapter/github';
 
-import { registerChatAdapter } from '../chat-adapter-bridge.js';
+import { registerChatAdapter } from '../adapter-registry.js';
 
 registerChatAdapter('github', () => {
   if (!process.env.CSDK_GITHUB_TOKEN) return null;

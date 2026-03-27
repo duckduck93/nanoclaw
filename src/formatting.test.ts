@@ -215,8 +215,12 @@ describe('formatOutboundForChannel', () => {
   });
 
   it('returns empty string when all text is internal', () => {
-    expect(formatOutboundForChannel('<internal>hidden</internal>', 'telegram')).toBe('');
-    expect(formatOutboundForChannel('<internal>hidden</internal>', 'whatsapp')).toBe('');
+    expect(
+      formatOutboundForChannel('<internal>hidden</internal>', 'telegram'),
+    ).toBe('');
+    expect(
+      formatOutboundForChannel('<internal>hidden</internal>', 'whatsapp'),
+    ).toBe('');
   });
 
   it('strips markdown for WhatsApp', () => {

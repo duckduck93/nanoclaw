@@ -1,6 +1,6 @@
 import { createSlackAdapter } from '@chat-adapter/slack';
 
-import { registerChatAdapter } from '../chat-adapter-bridge.js';
+import { registerChatAdapter } from '../adapter-registry.js';
 
 registerChatAdapter('slack', () => {
   if (!process.env.CSDK_SLACK_BOT_TOKEN) return null;

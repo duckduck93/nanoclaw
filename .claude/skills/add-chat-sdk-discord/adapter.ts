@@ -1,6 +1,6 @@
 import { createDiscordAdapter } from '@chat-adapter/discord';
 
-import { registerChatAdapter } from '../chat-adapter-bridge.js';
+import { registerChatAdapter } from '../adapter-registry.js';
 
 registerChatAdapter('discord', () => {
   if (!process.env.CSDK_DISCORD_BOT_TOKEN) return null;

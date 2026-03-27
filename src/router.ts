@@ -61,10 +61,7 @@ export function formatOutboundForChannel(
  * (adapter handles conversion via { markdown } in thread.post).
  * For native WhatsApp (Baileys), converts to plain text.
  */
-export function formatOutboundForAdapter(
-  rawText: string,
-  jid: string,
-): string {
+export function formatOutboundForAdapter(rawText: string, jid: string): string {
   const text = stripInternalTags(rawText);
   if (!text) return '';
 

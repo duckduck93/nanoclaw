@@ -1,6 +1,6 @@
 import { createResendAdapter } from '@resend/chat-sdk-adapter';
 
-import { registerChatAdapter } from '../chat-adapter-bridge.js';
+import { registerChatAdapter } from '../adapter-registry.js';
 
 registerChatAdapter('resend', () => {
   const fromAddress = process.env.CSDK_RESEND_FROM_ADDRESS;

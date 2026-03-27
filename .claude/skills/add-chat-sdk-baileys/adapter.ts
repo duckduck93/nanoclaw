@@ -1,7 +1,7 @@
 import { createBaileysAdapter } from 'chat-adapter-baileys';
 import { useMultiFileAuthState } from 'baileys';
 
-import { registerChatAdapter } from '../chat-adapter-bridge.js';
+import { registerChatAdapter } from '../adapter-registry.js';
 
 registerChatAdapter('baileys', () => {
   const authDir = process.env.CSDK_BAILEYS_AUTH_DIR;

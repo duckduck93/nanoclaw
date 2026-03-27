@@ -1,6 +1,6 @@
 import { createiMessageAdapter } from 'chat-adapter-imessage';
 
-import { registerChatAdapter } from '../chat-adapter-bridge.js';
+import { registerChatAdapter } from '../adapter-registry.js';
 
 registerChatAdapter('imessage', () => {
   const isLocal = process.env.CSDK_IMESSAGE_LOCAL !== 'false';

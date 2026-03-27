@@ -31,7 +31,7 @@ cp .claude/skills/add-chat-sdk-resend/adapter.ts src/channels/adapters/resend.ts
 In `src/channels/index.ts`, add in the `chat-sdk` section:
 
 ```typescript
-import './chat-adapter-bridge.js';
+// adapter-registry is imported by index.ts
 import './adapters/resend.js';
 ```
 

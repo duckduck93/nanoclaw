@@ -31,7 +31,7 @@ cp .claude/skills/add-chat-sdk-matrix/adapter.ts src/channels/adapters/matrix.ts
 In `src/channels/index.ts`, add in the `chat-sdk` section:
 
 ```typescript
-import './chat-adapter-bridge.js';
+// adapter-registry is imported by index.ts
 import './adapters/matrix.js';
 ```
 

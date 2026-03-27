@@ -33,7 +33,7 @@ cp .claude/skills/add-chat-sdk-teams/adapter.ts src/channels/adapters/teams.ts
 In `src/channels/index.ts`, add these lines (if not already present) in the `chat-sdk` section:
 
 ```typescript
-import './chat-adapter-bridge.js';
+// adapter-registry is imported by index.ts
 import './adapters/teams.js';
 ```
 

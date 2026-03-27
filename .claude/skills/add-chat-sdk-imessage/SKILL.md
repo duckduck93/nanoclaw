@@ -37,7 +37,7 @@ cp .claude/skills/add-chat-sdk-imessage/adapter.ts src/channels/adapters/imessag
 In `src/channels/index.ts`, add in the `chat-sdk` section:
 
 ```typescript
-import './chat-adapter-bridge.js';
+// adapter-registry is imported by index.ts
 import './adapters/imessage.js';
 ```
 

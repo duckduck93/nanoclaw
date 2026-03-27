@@ -1,6 +1,6 @@
 import { createMatrixAdapter } from '@beeper/chat-adapter-matrix';
 
-import { registerChatAdapter } from '../chat-adapter-bridge.js';
+import { registerChatAdapter } from '../adapter-registry.js';
 
 registerChatAdapter('matrix', () => {
   // createMatrixAdapter() reads from MATRIX_* env vars when called without args.

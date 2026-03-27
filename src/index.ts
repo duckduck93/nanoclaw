@@ -18,7 +18,7 @@ import './channels/index.js';
 import {
   getRegisteredAdapterNames,
   getChatAdapterFactory,
-} from './channels/chat-adapter-bridge.js';
+} from './channels/adapter-registry.js';
 import {
   getChannelFactory,
   getRegisteredChannelNames,
@@ -637,7 +637,7 @@ async function main(): Promise<void> {
       userName: ASSISTANT_NAME,
       adapters: chatAdapterMap,
       state: stateAdapter,
-      onLockConflict: 'force',
+      concurrency: 'concurrent',
       logger: 'silent',
     });
 
@@ -659,7 +659,13 @@ async function main(): Promise<void> {
         is_bot_message: message.author.isBot === true || message.author.isMe,
       };
       recordJidMapping(jid, adapterName, thread.id);
-      channelOpts.onChatMetadata(jid, newMessage.timestamp, thread.id, 'chat-sdk', true);
+      channelOpts.onChatMetadata(
+        jid,
+        newMessage.timestamp,
+        thread.id,
+        'chat-sdk',
+        true,
+      );
       channelOpts.onMessage(jid, newMessage);
     };
 

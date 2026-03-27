@@ -31,7 +31,7 @@ cp .claude/skills/add-chat-sdk-slack/adapter.ts src/channels/adapters/slack.ts
 In `src/channels/index.ts`, add these lines in the `chat-sdk` section:
 
 ```typescript
-import './chat-adapter-bridge.js';
+// adapter-registry is imported by index.ts
 import './adapters/slack.js';
 ```
 

@@ -31,7 +31,7 @@ cp .claude/skills/add-chat-sdk-telegram/adapter.ts src/channels/adapters/telegra
 In `src/channels/index.ts`, add these lines in the `chat-sdk` section:
 
 ```typescript
-import './chat-adapter-bridge.js';
+// adapter-registry is imported by index.ts
 import './adapters/telegram.js';
 ```
 

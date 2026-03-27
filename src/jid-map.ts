@@ -30,7 +30,9 @@ export function resolveJid(jid: string): JidMapping | null {
 
   // Check DB first
   const row = db
-    .prepare('SELECT adapter_name, thread_id FROM jid_adapter_map WHERE jid = ?')
+    .prepare(
+      'SELECT adapter_name, thread_id FROM jid_adapter_map WHERE jid = ?',
+    )
     .get(jid) as { adapter_name: string; thread_id: string } | undefined;
   if (row) return { adapterName: row.adapter_name, threadId: row.thread_id };
 

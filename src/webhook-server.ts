@@ -17,9 +17,7 @@ let server: http.Server | null = null;
 /**
  * Convert Node.js IncomingMessage to Web Request.
  */
-async function toWebRequest(
-  req: http.IncomingMessage,
-): Promise<Request> {
+async function toWebRequest(req: http.IncomingMessage): Promise<Request> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     chunks.push(chunk as Buffer);
@@ -72,9 +70,7 @@ async function fromWebResponse(
  * @param chat - The Chat instance whose webhooks to route to
  * @returns A cleanup function to shut down the server
  */
-export function startWebhookServer(
-  chat: Chat,
-): () => Promise<void> {
+export function startWebhookServer(chat: Chat): () => Promise<void> {
   const port = parseInt(
     process.env.WEBHOOK_PORT || String(DEFAULT_WEBHOOK_PORT),
     10,
@@ -118,10 +114,7 @@ export function startWebhookServer(
   });
 
   server.listen(port, () => {
-    logger.info(
-      { port, adapters: adapterNames },
-      'Webhook server started',
-    );
+    logger.info({ port, adapters: adapterNames }, 'Webhook server started');
   });
 
   return async () => {

@@ -5,7 +5,7 @@
 import crypto from 'crypto';
 
 import type Database from 'better-sqlite3';
-import type { StateAdapter } from 'chat';
+import type { StateAdapter, QueueEntry } from 'chat';
 
 import { getDatabase } from './db.js';
 
@@ -43,11 +43,7 @@ export class SqliteStateAdapter implements StateAdapter {
     return JSON.parse(row.value) as T;
   }
 
-  async set<T = unknown>(
-    key: string,
-    value: T,
-    ttlMs?: number,
-  ): Promise<void> {
+  async set<T = unknown>(key: string, value: T, ttlMs?: number): Promise<void> {
     const expiresAt = ttlMs ? Date.now() + ttlMs : null;
     this.db
       .prepare(
@@ -116,7 +112,9 @@ export class SqliteStateAdapter implements StateAdapter {
 
     // Delete expired lock first
     this.db
-      .prepare('DELETE FROM chat_sdk_locks WHERE thread_id = ? AND expires_at < ?')
+      .prepare(
+        'DELETE FROM chat_sdk_locks WHERE thread_id = ? AND expires_at < ?',
+      )
       .run(threadId, now);
 
     // Try to insert (fails if lock exists and isn't expired)
@@ -132,9 +130,7 @@ export class SqliteStateAdapter implements StateAdapter {
 
   async releaseLock(lock: Lock): Promise<void> {
     this.db
-      .prepare(
-        'DELETE FROM chat_sdk_locks WHERE thread_id = ? AND token = ?',
-      )
+      .prepare('DELETE FROM chat_sdk_locks WHERE thread_id = ? AND token = ?')
       .run(lock.threadId, lock.token);
   }
 
@@ -200,18 +196,54 @@ export class SqliteStateAdapter implements StateAdapter {
     return rows.map((r) => JSON.parse(r.value) as T);
   }
 
+  // --- Queue (for concurrency: 'queue' / 'debounce') ---
+
+  async enqueue(
+    threadId: string,
+    entry: QueueEntry,
+    maxSize: number,
+  ): Promise<number> {
+    const key = `queue:${threadId}`;
+    await this.appendToList(key, entry, { maxLength: maxSize });
+    return await this.queueDepth(threadId);
+  }
+
+  async dequeue(threadId: string): Promise<QueueEntry | null> {
+    const key = `queue:${threadId}`;
+    const row = this.db
+      .prepare(
+        'SELECT idx, value FROM chat_sdk_lists WHERE key = ? ORDER BY idx ASC LIMIT 1',
+      )
+      .get(key) as { idx: number; value: string } | undefined;
+    if (!row) return null;
+    this.db
+      .prepare('DELETE FROM chat_sdk_lists WHERE key = ? AND idx = ?')
+      .run(key, row.idx);
+    return JSON.parse(row.value) as QueueEntry;
+  }
+
+  async queueDepth(threadId: string): Promise<number> {
+    const key = `queue:${threadId}`;
+    const row = this.db
+      .prepare('SELECT COUNT(*) as count FROM chat_sdk_lists WHERE key = ?')
+      .get(key) as { count: number };
+    return row.count;
+  }
+
   // --- Cleanup ---
 
   private cleanup(): void {
     const now = Date.now();
     this.db
-      .prepare('DELETE FROM chat_sdk_kv WHERE expires_at IS NOT NULL AND expires_at < ?')
+      .prepare(
+        'DELETE FROM chat_sdk_kv WHERE expires_at IS NOT NULL AND expires_at < ?',
+      )
       .run(now);
+    this.db.prepare('DELETE FROM chat_sdk_locks WHERE expires_at < ?').run(now);
     this.db
-      .prepare('DELETE FROM chat_sdk_locks WHERE expires_at < ?')
-      .run(now);
-    this.db
-      .prepare('DELETE FROM chat_sdk_lists WHERE expires_at IS NOT NULL AND expires_at < ?')
+      .prepare(
+        'DELETE FROM chat_sdk_lists WHERE expires_at IS NOT NULL AND expires_at < ?',
+      )
       .run(now);
   }
 }
