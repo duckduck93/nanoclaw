@@ -61,6 +61,7 @@ import {
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
+import { createGeminiBot, GeminiBot, clearGeminiHistory } from './gemini-bot.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -73,6 +74,7 @@ let messageLoopRunning = false;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
+let geminiBot: GeminiBot | null = null;
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
@@ -537,10 +539,33 @@ async function main(): Promise<void> {
     logger.info({ signal }, 'Shutdown signal received');
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
+    await geminiBot?.disconnect();
     process.exit(0);
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+
+  // Handle /reset command — clears Claude session and Gemini history for the channel
+  async function handleReset(chatJid: string): Promise<void> {
+    const group = registeredGroups[chatJid];
+    if (!group) return;
+
+    const channel = findChannel(channels, chatJid);
+    if (!channel) return;
+
+    // Clear Claude session
+    delete sessions[group.folder];
+    setSession(group.folder, '');
+    delete lastAgentTimestamp[chatJid];
+    saveState();
+
+    // Clear Gemini in-memory history for this channel
+    const channelId = chatJid.replace(/^dc:/, '');
+    clearGeminiHistory(channelId);
+
+    logger.info({ chatJid, folder: group.folder }, 'Session reset');
+    await channel.sendMessage(chatJid, '세션이 초기화됐습니다. 새 대화를 시작합니다.');
+  }
 
   // Handle /remote-control and /remote-control-end commands
   async function handleRemoteControl(
@@ -589,6 +614,12 @@ async function main(): Promise<void> {
     onMessage: (chatJid: string, msg: NewMessage) => {
       // Remote control commands — intercept before storage
       const trimmed = msg.content.trim();
+      if (trimmed === '/reset') {
+        handleReset(chatJid).catch((err) =>
+          logger.error({ err, chatJid }, 'Reset command error'),
+        );
+        return;
+      }
       if (trimmed === '/remote-control' || trimmed === '/remote-control-end') {
         handleRemoteControl(trimmed, chatJid, msg).catch((err) =>
           logger.error({ err, chatJid }, 'Remote control command error'),
@@ -643,6 +674,15 @@ async function main(): Promise<void> {
   if (channels.length === 0) {
     logger.fatal('No channels connected');
     process.exit(1);
+  }
+
+  // Start Gemini bot if credentials are configured
+  geminiBot = createGeminiBot();
+  if (geminiBot) {
+    await geminiBot.connect();
+    logger.info('Gemini bot started');
+  } else {
+    logger.debug('Gemini bot not configured (GEMINI_BOT_TOKEN or GEMINI_API_KEY missing)');
   }
 
   // Start subsystems (independently of connection handler)
