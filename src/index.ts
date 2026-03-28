@@ -61,7 +61,12 @@ import {
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
-import { createGeminiBot, GeminiBot, clearGeminiHistory } from './gemini-bot.js';
+import {
+  createGeminiBot,
+  GeminiBot,
+  clearGeminiHistory,
+} from './gemini-bot.js';
+import { createCodexBot, CodexBot, clearCodexHistory } from './codex-bot.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -75,6 +80,7 @@ let messageLoopRunning = false;
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 let geminiBot: GeminiBot | null = null;
+let codexBot: CodexBot | null = null;
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
@@ -540,6 +546,7 @@ async function main(): Promise<void> {
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     await geminiBot?.disconnect();
+    await codexBot?.disconnect();
     process.exit(0);
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
@@ -562,9 +569,13 @@ async function main(): Promise<void> {
     // Clear Gemini in-memory history for this channel
     const channelId = chatJid.replace(/^dc:/, '');
     clearGeminiHistory(channelId);
+    clearCodexHistory(channelId);
 
     logger.info({ chatJid, folder: group.folder }, 'Session reset');
-    await channel.sendMessage(chatJid, '세션이 초기화됐습니다. 새 대화를 시작합니다.');
+    await channel.sendMessage(
+      chatJid,
+      '세션이 초기화됐습니다. 새 대화를 시작합니다.',
+    );
   }
 
   // Handle /remote-control and /remote-control-end commands
@@ -682,7 +693,20 @@ async function main(): Promise<void> {
     await geminiBot.connect();
     logger.info('Gemini bot started');
   } else {
-    logger.debug('Gemini bot not configured (GEMINI_BOT_TOKEN or GEMINI_API_KEY missing)');
+    logger.debug(
+      'Gemini bot not configured (GEMINI_BOT_TOKEN or GEMINI_API_KEY missing)',
+    );
+  }
+
+  // Start Codex bot if credentials are configured
+  codexBot = createCodexBot();
+  if (codexBot) {
+    await codexBot.connect();
+    logger.info('Codex bot started');
+  } else {
+    logger.debug(
+      'Codex bot not configured (CODEX_BOT_TOKEN or CODEX_API_KEY missing)',
+    );
   }
 
   // Start subsystems (independently of connection handler)

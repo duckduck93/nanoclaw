@@ -1,0 +1,22 @@
+# NanoClaw Codex Agent Container
+# Runs @openai/codex CLI in isolated environment with per-channel workspace
+
+FROM node:22-slim
+
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install codex globally
+RUN npm install -g @openai/codex
+
+# Build codex-runner
+WORKDIR /app
+COPY codex-runner/package*.json ./
+RUN npm install
+COPY codex-runner/ ./
+RUN npm run build
+
+CMD ["node", "dist/index.js"]
