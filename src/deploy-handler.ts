@@ -67,7 +67,10 @@ export async function handleDeployRequest(
   // Resolve and validate context path — must stay within group folder
   const groupDir = resolveGroupFolderPath(groupFolder);
   const contextPath = path.resolve(groupDir, request.contextPath);
-  if (!contextPath.startsWith(groupDir + path.sep) && contextPath !== groupDir) {
+  if (
+    !contextPath.startsWith(groupDir + path.sep) &&
+    contextPath !== groupDir
+  ) {
     writeResult({
       id: request.id,
       status: 'error',
@@ -103,7 +106,10 @@ export async function handleDeployRequest(
     logger.info({ cmd: buildCmd }, 'Running docker build');
     const { stdout: buildStdout } = await runCommand(buildCmd, 300_000);
     buildOutput = buildStdout.trim();
-    logger.info({ groupFolder, image: request.image }, 'docker build succeeded');
+    logger.info(
+      { groupFolder, image: request.image },
+      'docker build succeeded',
+    );
 
     // Stop existing container with same name before re-running
     if (request.containerName) {

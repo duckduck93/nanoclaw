@@ -122,7 +122,9 @@ export function startIpcWatcher(deps: IpcDeps): void {
         if (fs.existsSync(deployDir)) {
           const deployFiles = fs
             .readdirSync(deployDir)
-            .filter((f) => f.endsWith('.json') && !f.endsWith('.response.json'));
+            .filter(
+              (f) => f.endsWith('.json') && !f.endsWith('.response.json'),
+            );
           for (const file of deployFiles) {
             const filePath = path.join(deployDir, file);
             try {
@@ -131,19 +133,35 @@ export function startIpcWatcher(deps: IpcDeps): void {
               );
               fs.unlinkSync(filePath);
               // Run async, result written to deploy/{id}.response.json
-              handleDeployRequest(request, sourceGroup, path.join(ipcBaseDir, sourceGroup)).catch(
-                (err) => logger.error({ file, sourceGroup, err }, 'Deploy handler error'),
+              handleDeployRequest(
+                request,
+                sourceGroup,
+                path.join(ipcBaseDir, sourceGroup),
+              ).catch((err) =>
+                logger.error(
+                  { file, sourceGroup, err },
+                  'Deploy handler error',
+                ),
               );
             } catch (err) {
-              logger.error({ file, sourceGroup, err }, 'Error reading deploy request');
+              logger.error(
+                { file, sourceGroup, err },
+                'Error reading deploy request',
+              );
               const errorDir = path.join(ipcBaseDir, 'errors');
               fs.mkdirSync(errorDir, { recursive: true });
-              fs.renameSync(filePath, path.join(errorDir, `${sourceGroup}-${file}`));
+              fs.renameSync(
+                filePath,
+                path.join(errorDir, `${sourceGroup}-${file}`),
+              );
             }
           }
         }
       } catch (err) {
-        logger.error({ err, sourceGroup }, 'Error reading IPC deploy directory');
+        logger.error(
+          { err, sourceGroup },
+          'Error reading IPC deploy directory',
+        );
       }
 
       // Process tasks from this group's IPC directory
