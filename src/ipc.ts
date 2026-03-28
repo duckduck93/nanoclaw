@@ -6,6 +6,7 @@ import { CronExpressionParser } from 'cron-parser';
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
+import { handleDeployRequest, DeployRequest } from './deploy-handler.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
@@ -113,6 +114,36 @@ export function startIpcWatcher(deps: IpcDeps): void {
           { err, sourceGroup },
           'Error reading IPC messages directory',
         );
+      }
+
+      // Process deploy requests from this group's IPC directory
+      const deployDir = path.join(ipcBaseDir, sourceGroup, 'deploy');
+      try {
+        if (fs.existsSync(deployDir)) {
+          const deployFiles = fs
+            .readdirSync(deployDir)
+            .filter((f) => f.endsWith('.json') && !f.endsWith('.response.json'));
+          for (const file of deployFiles) {
+            const filePath = path.join(deployDir, file);
+            try {
+              const request: DeployRequest = JSON.parse(
+                fs.readFileSync(filePath, 'utf-8'),
+              );
+              fs.unlinkSync(filePath);
+              // Run async, result written to deploy/{id}.response.json
+              handleDeployRequest(request, sourceGroup, path.join(ipcBaseDir, sourceGroup)).catch(
+                (err) => logger.error({ file, sourceGroup, err }, 'Deploy handler error'),
+              );
+            } catch (err) {
+              logger.error({ file, sourceGroup, err }, 'Error reading deploy request');
+              const errorDir = path.join(ipcBaseDir, 'errors');
+              fs.mkdirSync(errorDir, { recursive: true });
+              fs.renameSync(filePath, path.join(errorDir, `${sourceGroup}-${file}`));
+            }
+          }
+        }
+      } catch (err) {
+        logger.error({ err, sourceGroup }, 'Error reading IPC deploy directory');
       }
 
       // Process tasks from this group's IPC directory

@@ -210,6 +210,16 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Docker socket for container management tools
+  const dockerSocket = '/var/run/docker.sock';
+  if (fs.existsSync(dockerSocket)) {
+    mounts.push({
+      hostPath: dockerSocket,
+      containerPath: dockerSocket,
+      readonly: false,
+    });
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
