@@ -37,12 +37,14 @@ import {
   getNewMessages,
   getRouterState,
   initDatabase,
+  savePendingRetry,
   setRegisteredGroup,
   setRouterState,
   setSession,
   storeChatMetadata,
   storeMessage,
 } from './db.js';
+import { PENDING_RETRY_INTERVAL_MS } from './rate-limit.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
@@ -296,6 +298,14 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
 
+  if (output === 'rate_limit') {
+    await channel.sendMessage(
+      chatJid,
+      '⏳ API 사용량 한도 초과. 작업을 저장했습니다. 1시간 후 자동으로 재시도하겠습니다.',
+    );
+    return true;
+  }
+
   if (output === 'error' || hadError) {
     // If we already sent output to the user, don't roll back the cursor —
     // the user got their response and re-processing would send duplicates.
@@ -324,7 +334,7 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
-): Promise<'success' | 'error'> {
+): Promise<'success' | 'error' | 'rate_limit'> {
   const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
 
@@ -387,6 +397,25 @@ async function runAgent(
     }
 
     if (output.status === 'error') {
+      if (output.rateLimit) {
+        const now = new Date();
+        savePendingRetry({
+          id: `claude-${chatJid}-${now.getTime()}`,
+          runner_type: 'claude',
+          chat_jid: chatJid,
+          prompt,
+          group_folder: group.folder,
+          channel_name: null,
+          session_id: sessionId ?? null,
+          retry_at: new Date(now.getTime() + PENDING_RETRY_INTERVAL_MS).toISOString(),
+          created_at: now.toISOString(),
+        });
+        logger.warn(
+          { group: group.name },
+          'Claude rate limited, saved pending retry',
+        );
+        return 'rate_limit';
+      }
       logger.error(
         { group: group.name, error: output.error },
         'Container agent error',

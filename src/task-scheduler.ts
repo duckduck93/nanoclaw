@@ -15,7 +15,15 @@ import {
   logTaskRun,
   updateTask,
   updateTaskAfterRun,
+  getDuePendingRetries,
+  deletePendingRetry,
+  reschedulePendingRetry,
+  PendingRetry,
 } from './db.js';
+import {
+  MAX_PENDING_RETRY_ATTEMPTS,
+  PENDING_RETRY_INTERVAL_MS,
+} from './rate-limit.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
@@ -240,6 +248,102 @@ async function runTask(
   updateTaskAfterRun(task.id, nextRun, resultSummary);
 }
 
+async function runPendingRetry(
+  retry: PendingRetry,
+  deps: SchedulerDependencies,
+): Promise<void> {
+  const groups = deps.registeredGroups();
+  const group = Object.values(groups).find(
+    (g) => g.folder === retry.group_folder,
+  );
+
+  if (!group) {
+    logger.error(
+      { retryId: retry.id, groupFolder: retry.group_folder },
+      'Pending retry: group not found, discarding',
+    );
+    deletePendingRetry(retry.id);
+    return;
+  }
+
+  logger.info(
+    { retryId: retry.id, group: group.name, attempts: retry.attempts },
+    'Running pending retry',
+  );
+
+  let result: string | null = null;
+  let rateLimit = false;
+
+  try {
+    const sessions = deps.getSessions();
+    const output = await runContainerAgent(
+      group,
+      {
+        prompt: retry.prompt,
+        sessionId: retry.session_id ?? sessions[group.folder],
+        groupFolder: group.folder,
+        chatJid: retry.chat_jid,
+        isMain: group.isMain === true,
+        assistantName: ASSISTANT_NAME,
+      },
+      (proc, containerName) =>
+        deps.onProcess(retry.chat_jid, proc, containerName, group.folder),
+      async (streamedOutput: ContainerOutput) => {
+        if (streamedOutput.result) {
+          result = streamedOutput.result;
+          await deps.sendMessage(retry.chat_jid, streamedOutput.result);
+        }
+      },
+    );
+
+    if (output.rateLimit) {
+      rateLimit = true;
+    } else if (output.status === 'error') {
+      logger.error(
+        { retryId: retry.id, error: output.error },
+        'Pending retry failed with non-rate-limit error, discarding',
+      );
+      await deps.sendMessage(
+        retry.chat_jid,
+        `❌ 재시도 중 오류가 발생했습니다: ${output.error ?? '알 수 없는 오류'}`,
+      );
+      deletePendingRetry(retry.id);
+      return;
+    } else {
+      // Success
+      if (!result) {
+        // result was streamed, nothing else to do
+      }
+      deletePendingRetry(retry.id);
+      return;
+    }
+  } catch (err) {
+    logger.error({ retryId: retry.id, err }, 'Pending retry threw unexpectedly');
+    deletePendingRetry(retry.id);
+    return;
+  }
+
+  if (rateLimit) {
+    if (retry.attempts + 1 >= MAX_PENDING_RETRY_ATTEMPTS) {
+      logger.warn({ retryId: retry.id }, 'Pending retry exhausted all attempts');
+      await deps.sendMessage(
+        retry.chat_jid,
+        '❌ API 사용량 한도가 지속되어 작업을 완료하지 못했습니다. 나중에 직접 다시 시도해주세요.',
+      );
+      deletePendingRetry(retry.id);
+    } else {
+      const nextRetryAt = new Date(
+        Date.now() + PENDING_RETRY_INTERVAL_MS,
+      ).toISOString();
+      reschedulePendingRetry(retry.id, nextRetryAt);
+      logger.info(
+        { retryId: retry.id, nextRetryAt, attempt: retry.attempts + 1 },
+        'Pending retry rescheduled',
+      );
+    }
+  }
+}
+
 let schedulerRunning = false;
 
 export function startSchedulerLoop(deps: SchedulerDependencies): void {
@@ -266,6 +370,13 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
 
         deps.queue.enqueueTask(currentTask.chat_jid, currentTask.id, () =>
           runTask(currentTask, deps),
+        );
+      }
+
+      const dueRetries = getDuePendingRetries('claude');
+      for (const retry of dueRetries) {
+        deps.queue.enqueueTask(retry.chat_jid, `retry-${retry.id}`, () =>
+          runPendingRetry(retry, deps),
         );
       }
     } catch (err) {

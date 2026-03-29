@@ -12,6 +12,7 @@ import {
   CONTAINER_TIMEOUT,
   CONTAINER_MAX_OUTPUT_SIZE,
   TIMEZONE,
+  ONECLI_URL,
 } from './config.js';
 import { logger } from './logger.js';
 import {
@@ -20,6 +21,10 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { readEnvFile } from './env.js';
+import { OneCLI } from '@onecli-sh/sdk';
+import { isRateLimitError } from './rate-limit.js';
+
+const onecli = new OneCLI({ url: ONECLI_URL });
 
 const GEMINI_CONTAINER_IMAGE =
   process.env.GEMINI_CONTAINER_IMAGE || 'nanoclaw-gemini-agent:latest';
@@ -40,6 +45,7 @@ export interface GeminiContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+  rateLimit?: boolean;
 }
 
 function sanitizeChannelName(name: string): string {
@@ -96,12 +102,12 @@ export function saveGeminiSessionId(
   fs.writeFileSync(p, sessionId, 'utf-8');
 }
 
-function buildArgs(
+async function buildArgs(
   channelName: string,
   containerName: string,
-  geminiApiKey: string,
   geminiModel: string,
-): string[] {
+  agentIdentifier: string,
+): Promise<string[]> {
   const groupDir = getGeminiGroupDir(channelName);
   const sessionsDir = getGeminiSessionsDir(channelName);
   const ipcDir = getGeminiIpcDir(channelName);
@@ -113,10 +119,30 @@ function buildArgs(
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   args.push('-e', `TZ=${TIMEZONE}`);
-  args.push('-e', `GEMINI_API_KEY=${geminiApiKey}`);
+  // Dummy value so gemini-cli passes startup validation; OneCLI proxy injects the real key.
+  args.push('-e', 'GEMINI_API_KEY=onecli-managed');
   args.push('-e', `GEMINI_MODEL=${geminiModel}`);
   // npm cache must be writable by the host uid (not /home/node/.npm which is owned by node:1000)
   args.push('-e', 'NPM_CONFIG_CACHE=/tmp/.npm');
+
+  // OneCLI gateway injects x-goog-api-key header for generativelanguage.googleapis.com
+  const onecliApplied = await onecli.applyContainerConfig(args, {
+    addHostMapping: false,
+    agent: agentIdentifier,
+  });
+  if (onecliApplied) {
+    logger.info({ containerName }, 'OneCLI gateway config applied (Gemini)');
+  } else {
+    logger.warn({ containerName }, 'OneCLI gateway not reachable — Gemini container will use env key directly');
+    // Fallback: use real key from env
+    const envVars = readEnvFile(['GEMINI_API_KEY']);
+    const realKey = process.env.GEMINI_API_KEY || envVars.GEMINI_API_KEY || '';
+    if (realKey) {
+      // Replace dummy with real key
+      const idx = args.indexOf('GEMINI_API_KEY=onecli-managed');
+      if (idx !== -1) args[idx] = `GEMINI_API_KEY=${realKey}`;
+    }
+  }
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
@@ -161,27 +187,22 @@ export async function runGeminiContainerAgent(
   const { channelName } = input;
   const startTime = Date.now();
 
-  const envVars = readEnvFile(['GEMINI_API_KEY', 'GEMINI_MODEL']);
-  const geminiApiKey =
-    process.env.GEMINI_API_KEY || envVars.GEMINI_API_KEY || '';
+  const envVars = readEnvFile(['GEMINI_MODEL']);
   const geminiModel =
     process.env.GEMINI_MODEL || envVars.GEMINI_MODEL || 'gemini-2.0-flash';
-
-  if (!geminiApiKey) {
-    return { status: 'error', result: null, error: 'GEMINI_API_KEY not set' };
-  }
 
   const safeName = `gemini_${sanitizeChannelName(channelName)}`.replace(
     /[^a-zA-Z0-9-]/g,
     '-',
   );
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
+  const agentIdentifier = `gemini-${sanitizeChannelName(channelName).toLowerCase().replace(/_/g, '-')}`;
 
-  const containerArgs = buildArgs(
+  const containerArgs = await buildArgs(
     channelName,
     containerName,
-    geminiApiKey,
     geminiModel,
+    agentIdentifier,
   );
 
   const containerInput = {
@@ -302,6 +323,12 @@ export async function runGeminiContainerAgent(
       );
 
       if (code !== 0) {
+        if (isRateLimitError(stderr)) {
+          logger.warn({ channelName }, 'Gemini rate limit detected');
+          resolve({ status: 'error', result: null, rateLimit: true, error: 'Rate limited by API' });
+          return;
+        }
+
         logger.error(
           { channelName, code, duration },
           'Gemini container exited with error',

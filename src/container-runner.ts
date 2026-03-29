@@ -27,6 +27,7 @@ import {
 import { OneCLI } from '@onecli-sh/sdk';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
+import { isRateLimitError } from './rate-limit.js';
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
@@ -50,6 +51,7 @@ export interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+  rateLimit?: boolean;
 }
 
 interface VolumeMount {
@@ -580,6 +582,12 @@ export async function runContainerAgent(
       logger.debug({ logFile, verbose: isVerbose }, 'Container log written');
 
       if (code !== 0) {
+        if (isRateLimitError(stderr)) {
+          logger.warn({ group: group.name }, 'Claude rate limit detected');
+          resolve({ status: 'error', result: null, rateLimit: true, error: 'Rate limited by API' });
+          return;
+        }
+
         logger.error(
           {
             group: group.name,

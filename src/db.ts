@@ -65,6 +65,19 @@ function createSchema(database: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_task_run_logs ON task_run_logs(task_id, run_at);
 
+    CREATE TABLE IF NOT EXISTS pending_retries (
+      id TEXT PRIMARY KEY,
+      runner_type TEXT NOT NULL,
+      chat_jid TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      group_folder TEXT,
+      channel_name TEXT,
+      session_id TEXT,
+      retry_at TEXT NOT NULL,
+      attempts INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS router_state (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
@@ -716,4 +729,58 @@ function migrateJsonState(): void {
       }
     }
   }
+}
+
+// --- Pending retries ---
+
+export interface PendingRetry {
+  id: string;
+  runner_type: string; // 'claude' | 'gemini' | 'codex'
+  chat_jid: string;
+  prompt: string;
+  group_folder: string | null;
+  channel_name: string | null;
+  session_id: string | null;
+  retry_at: string;
+  attempts: number;
+  created_at: string;
+}
+
+export function savePendingRetry(
+  retry: Omit<PendingRetry, 'attempts'>,
+): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO pending_retries
+     (id, runner_type, chat_jid, prompt, group_folder, channel_name, session_id, retry_at, attempts, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+  ).run(
+    retry.id,
+    retry.runner_type,
+    retry.chat_jid,
+    retry.prompt,
+    retry.group_folder ?? null,
+    retry.channel_name ?? null,
+    retry.session_id ?? null,
+    retry.retry_at,
+    retry.created_at,
+  );
+}
+
+export function getDuePendingRetries(runnerType: string): PendingRetry[] {
+  const now = new Date().toISOString();
+  return db
+    .prepare(
+      `SELECT * FROM pending_retries WHERE runner_type = ? AND retry_at <= ? ORDER BY retry_at`,
+    )
+    .all(runnerType, now) as PendingRetry[];
+}
+
+export function deletePendingRetry(id: string): void {
+  db.prepare('DELETE FROM pending_retries WHERE id = ?').run(id);
+}
+
+export function reschedulePendingRetry(id: string, retryAt: string): void {
+  db.prepare(
+    `UPDATE pending_retries SET attempts = attempts + 1, retry_at = ? WHERE id = ?`,
+  ).run(retryAt, id);
 }

@@ -12,6 +12,7 @@ import {
   CONTAINER_TIMEOUT,
   CONTAINER_MAX_OUTPUT_SIZE,
   TIMEZONE,
+  ONECLI_URL,
 } from './config.js';
 import { logger } from './logger.js';
 import {
@@ -20,6 +21,10 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { readEnvFile } from './env.js';
+import { OneCLI } from '@onecli-sh/sdk';
+import { isRateLimitError } from './rate-limit.js';
+
+const onecli = new OneCLI({ url: ONECLI_URL });
 
 const CODEX_CONTAINER_IMAGE =
   process.env.CODEX_CONTAINER_IMAGE || 'nanoclaw-codex-agent:latest';
@@ -38,6 +43,7 @@ export interface CodexContainerOutput {
   status: 'success' | 'error';
   result: string | null;
   error?: string;
+  rateLimit?: boolean;
 }
 
 function sanitizeChannelName(name: string): string {
@@ -56,12 +62,12 @@ function getCodexIpcDir(channelName: string): string {
   );
 }
 
-function buildArgs(
+async function buildArgs(
   channelName: string,
   containerName: string,
-  codexApiKey: string,
   codexModel: string,
-): string[] {
+  agentIdentifier: string,
+): Promise<string[]> {
   const groupDir = getCodexGroupDir(channelName);
   const ipcDir = getCodexIpcDir(channelName);
 
@@ -71,9 +77,28 @@ function buildArgs(
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   args.push('-e', `TZ=${TIMEZONE}`);
-  args.push('-e', `OPENAI_API_KEY=${codexApiKey}`);
+  // Dummy value so codex passes startup validation; OneCLI proxy injects the real key.
+  args.push('-e', 'OPENAI_API_KEY=onecli-managed');
   args.push('-e', `CODEX_MODEL=${codexModel}`);
   args.push('-e', 'NPM_CONFIG_CACHE=/tmp/.npm');
+
+  // OneCLI gateway injects Authorization: Bearer header for api.openai.com
+  const onecliApplied = await onecli.applyContainerConfig(args, {
+    addHostMapping: false,
+    agent: agentIdentifier,
+  });
+  if (onecliApplied) {
+    logger.info({ containerName }, 'OneCLI gateway config applied (Codex)');
+  } else {
+    logger.warn({ containerName }, 'OneCLI gateway not reachable — Codex container will use env key directly');
+    // Fallback: use real key from env
+    const envVars = readEnvFile(['CODEX_API_KEY']);
+    const realKey = process.env.CODEX_API_KEY || envVars.CODEX_API_KEY || '';
+    if (realKey) {
+      const idx = args.indexOf('OPENAI_API_KEY=onecli-managed');
+      if (idx !== -1) args[idx] = `OPENAI_API_KEY=${realKey}`;
+    }
+  }
 
   args.push(...hostGatewayArgs());
 
@@ -105,26 +130,22 @@ export async function runCodexContainerAgent(
   const { channelName } = input;
   const startTime = Date.now();
 
-  const envVars = readEnvFile(['CODEX_API_KEY', 'CODEX_MODEL']);
-  const codexApiKey = process.env.CODEX_API_KEY || envVars.CODEX_API_KEY || '';
+  const envVars = readEnvFile(['CODEX_MODEL']);
   const codexModel =
     process.env.CODEX_MODEL || envVars.CODEX_MODEL || 'codex-mini-latest';
-
-  if (!codexApiKey) {
-    return { status: 'error', result: null, error: 'CODEX_API_KEY not set' };
-  }
 
   const safeName = `codex_${sanitizeChannelName(channelName)}`.replace(
     /[^a-zA-Z0-9-]/g,
     '-',
   );
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
+  const agentIdentifier = `codex-${sanitizeChannelName(channelName).toLowerCase().replace(/_/g, '-')}`;
 
-  const containerArgs = buildArgs(
+  const containerArgs = await buildArgs(
     channelName,
     containerName,
-    codexApiKey,
     codexModel,
+    agentIdentifier,
   );
 
   const containerInput = {
@@ -239,6 +260,12 @@ export async function runCodexContainerAgent(
       );
 
       if (code !== 0) {
+        if (isRateLimitError(stderr)) {
+          logger.warn({ channelName }, 'Codex rate limit detected');
+          resolve({ status: 'error', result: null, rateLimit: true, error: 'Rate limited by API' });
+          return;
+        }
+
         logger.error(
           { channelName, code, duration },
           'Codex container exited with error',

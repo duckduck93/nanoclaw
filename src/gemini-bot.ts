@@ -17,6 +17,16 @@ import {
   saveGeminiSessionId,
   GeminiContainerOutput,
 } from './gemini-container-runner.js';
+import {
+  savePendingRetry,
+  getDuePendingRetries,
+  deletePendingRetry,
+  reschedulePendingRetry,
+} from './db.js';
+import {
+  PENDING_RETRY_INTERVAL_MS,
+  MAX_PENDING_RETRY_ATTEMPTS,
+} from './rate-limit.js';
 
 const MAX_MESSAGE_LENGTH = 2000;
 
@@ -113,7 +123,7 @@ export class GeminiBot {
       const sessionId =
         this.sessionIds.get(channelId) ?? loadGeminiSessionId(channelName);
 
-      await runGeminiContainerAgent(
+      const agentOutput = await runGeminiContainerAgent(
         {
           prompt: userTurn,
           sessionId,
@@ -162,6 +172,29 @@ export class GeminiBot {
           }
         },
       );
+
+      if (agentOutput.rateLimit) {
+        const now = new Date();
+        savePendingRetry({
+          id: `gemini-${channelId}-${now.getTime()}`,
+          runner_type: 'gemini',
+          chat_jid: channelId,
+          prompt: userTurn,
+          group_folder: null,
+          channel_name: channelName,
+          session_id: sessionId ?? null,
+          retry_at: new Date(now.getTime() + PENDING_RETRY_INTERVAL_MS).toISOString(),
+          created_at: now.toISOString(),
+        });
+        try {
+          await message.reply(
+            '⏳ API 사용량 한도 초과. 작업을 저장했습니다. 1시간 후 자동으로 재시도하겠습니다.',
+          );
+        } catch {
+          /* ignore */
+        }
+        logger.warn({ channelId, channelName }, 'Gemini rate limited, saved pending retry');
+      }
     });
 
     this.client.on(Events.Error, (err) => {
@@ -172,10 +205,89 @@ export class GeminiBot {
       this.client!.once(Events.ClientReady, (readyClient) => {
         logger.info({ username: readyClient.user.tag }, 'Gemini bot connected');
         console.log(`\n  Gemini bot: ${readyClient.user.tag}`);
+        this.startPendingRetryLoop();
         resolve();
       });
       this.client!.login(this.botToken);
     });
+  }
+
+  private startPendingRetryLoop(): void {
+    const check = async () => {
+      const retries = getDuePendingRetries('gemini');
+      for (const retry of retries) {
+        logger.info(
+          { retryId: retry.id, channelId: retry.chat_jid, attempts: retry.attempts },
+          'Running Gemini pending retry',
+        );
+
+        let result: string | null = null;
+
+        const output = await runGeminiContainerAgent(
+          {
+            prompt: retry.prompt,
+            sessionId: retry.session_id ?? undefined,
+            channelName: retry.channel_name ?? retry.chat_jid,
+            channelId: retry.chat_jid,
+            senderName: 'retry',
+          },
+          (proc, containerName) => {
+            proc.on('close', () => {
+              /* nothing to clean up for retries */
+            });
+            void containerName;
+          },
+          async (streamedOutput: GeminiContainerOutput) => {
+            if (streamedOutput.newSessionId) {
+              this.sessionIds.set(retry.chat_jid, streamedOutput.newSessionId);
+              saveGeminiSessionId(
+                retry.channel_name ?? retry.chat_jid,
+                streamedOutput.newSessionId,
+              );
+            }
+            if (streamedOutput.result) {
+              result = streamedOutput.result;
+              try {
+                const ch = await this.client?.channels.fetch(retry.chat_jid);
+                if (ch && 'send' in ch) {
+                  await (ch as TextChannel).send(streamedOutput.result);
+                }
+              } catch (err) {
+                logger.error({ err, retryId: retry.id }, 'Failed to send Gemini retry result');
+              }
+            }
+          },
+        );
+
+        if (output.rateLimit) {
+          if (retry.attempts + 1 >= MAX_PENDING_RETRY_ATTEMPTS) {
+            logger.warn({ retryId: retry.id }, 'Gemini pending retry exhausted all attempts');
+            try {
+              const ch = await this.client?.channels.fetch(retry.chat_jid);
+              if (ch && 'send' in ch) {
+                await (ch as TextChannel).send(
+                  '❌ API 사용량 한도가 지속되어 작업을 완료하지 못했습니다. 나중에 직접 다시 시도해주세요.',
+                );
+              }
+            } catch { /* ignore */ }
+            deletePendingRetry(retry.id);
+          } else {
+            reschedulePendingRetry(
+              retry.id,
+              new Date(Date.now() + PENDING_RETRY_INTERVAL_MS).toISOString(),
+            );
+          }
+        } else if (output.status === 'error') {
+          logger.error({ retryId: retry.id }, 'Gemini pending retry failed, discarding');
+          deletePendingRetry(retry.id);
+        } else {
+          if (!result) deletePendingRetry(retry.id);
+          else deletePendingRetry(retry.id);
+        }
+      }
+    };
+
+    setInterval(() => { void check(); }, PENDING_RETRY_INTERVAL_MS);
   }
 
   clearHistory(channelId?: string): void {
